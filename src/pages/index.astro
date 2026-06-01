@@ -1,0 +1,211 @@
+---
+// src/pages/index.astro
+import Layout from "../layouts/Layout.astro";
+
+// Cú pháp bắt buộc của Astro v6 & Cloudflare Platform
+import { env } from "cloudflare:workers";
+
+// Lấy DB một cách an toàn
+const DB = env?.DB;
+
+if (!DB) {
+  return new Response(
+    "Lỗi kết nối database: Không tìm thấy Binding 'DB'."
+  );
+}
+
+// Đọc tham số Tìm kiếm (search) và Chuyên mục (cat - nhận vào ID dạng số như: ?cat=1) từ URL
+const url = new URL(Astro.request.url);
+const searchKeyword = url.searchParams.get('search') || '';
+const categoryFilter = url.searchParams.get('cat') || ''; // ID danh mục (Ví dụ: 1, 2, 3)
+
+// 1. Kéo cấu hình hệ thống
+const { results: settingsRaw } = await DB.prepare("SELECT * FROM settings").all();
+const configs = Object.fromEntries(settingsRaw.map((s: any) => [s.key, s.value]));
+const adsTop = configs.ads_top || '';
+const adsInfeed = configs.ads_infeed || '';
+
+// Đọc giới hạn hiển thị bài viết được cấu hình từ admin panel (mặc định là 10 bài)
+const displayLimit = configs.display_limit ? parseInt(configs.display_limit) : 10;
+
+// 2. Kéo danh sách bài viết chính
+let mainQuery = `
+  SELECT a.*, c.name as category_name, c.color_code
+  FROM articles a
+  JOIN categories c ON a.category_id = c.id
+  WHERE 1=1
+`;
+const queryParams: any[] = [];
+
+if (searchKeyword) {
+  mainQuery += ` AND (a.title LIKE ? OR a.sapo LIKE ?)`;
+  queryParams.push(`%${searchKeyword}%`, `%${searchKeyword}%`);
+}
+if (categoryFilter) {
+  mainQuery += ` AND c.id = ?`;
+  queryParams.push(categoryFilter);
+}
+mainQuery += ` ORDER BY a.id DESC LIMIT ?`;
+queryParams.push(displayLimit);
+
+const { results: articles } = await DB.prepare(mainQuery).bind(...queryParams).all();
+
+// 3. Kéo danh sách 5 bài viết "XU HƯỚNG ĐỘC GIẢ"
+const { results: trendingArticles } = await DB.prepare(`
+  SELECT a.id, a.title, a.slug, a.view_count, c.name as category_name, c.color_code
+  FROM articles a
+  JOIN categories c ON a.category_id = c.id
+  ORDER BY a.id DESC LIMIT 5
+`).all();
+
+// 4. Kéo danh sách 4 bài viết "TOP XEM NHIỀU"
+const { results: topViewsArticles } = await DB.prepare(`
+  SELECT a.id, a.title, a.slug, a.image_url, a.view_count, c.name as category_name, c.color_code
+  FROM articles a
+  JOIN categories c ON a.category_id = c.id
+  ORDER BY a.view_count DESC LIMIT 4
+`).all();
+
+// Tách bài viết đầu tiên làm Tin nổi bật (Highlight) nếu có dữ liệu bài viết
+const highlightArticle = articles[0] as any;
+const regularArticles = articles.slice(1);
+
+// Xác định chính xác danh sách tin hiển thị ở hàng dưới
+const targetList = (!searchKeyword && !categoryFilter) ? regularArticles : articles;
+---
+
+<Layout title={searchKeyword ? `Kết quả tìm kiếm cho "${searchKeyword}"` : "Báo Mới AI - Trang Chủ"}>
+  <Fragment set:html={adsTop} />
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-7xl mx-auto px-2 sm:px-4 py-4">
+    
+    <div class="lg:col-span-2 space-y-8">
+      
+      {searchKeyword && (
+        <div class="bg-gray-100 p-4 rounded-xl text-sm text-gray-700">
+          🔍 Tìm thấy <strong>{articles.length}</strong> bài viết phù hợp với từ khóa: "{searchKeyword}"
+        </div>
+      )}
+
+      {/* KHỐI HIGHLIGHT */}
+      {highlightArticle && !searchKeyword && !categoryFilter && (
+        <div class="bg-white rounded-2xl overflow-hidden border border-gray-100 shadow-sm hover:shadow-md transition-all group">
+          <a href={`/bai-viet/${highlightArticle.slug}`} class="block aspect-video w-full overflow-hidden bg-gray-100">
+            <img src={highlightArticle.image_url} alt={highlightArticle.title} class="w-full h-full object-cover group-hover:scale-102 transition-transform duration-500" />
+          </a>
+          <div class="p-6 space-y-3">
+            <span class="text-xs font-bold uppercase text-white px-3 py-1 rounded-md" style={`background-color: ${highlightArticle.color_code}`}>
+              {highlightArticle.category_name}
+            </span>
+            <h1 class="text-2xl font-black text-gray-900 group-hover:text-red-600 transition-colors leading-tight">
+              <a href={`/bai-viet/${highlightArticle.slug}`}>{highlightArticle.title}</a>
+            </h1>
+            <p class="text-gray-600 text-base leading-relaxed line-clamp-3">
+              {highlightArticle.sapo}
+            </p>
+          </div>
+        </div>
+      )}
+
+      <h3 class="text-xl font-extrabold text-gray-900 border-b-2 border-red-600 pb-2 flex items-center gap-2">
+        <span class="w-2.5 h-5 bg-red-600 rounded-sm"></span>
+        {searchKeyword ? 'Tin tức tìm thấy' : 'Tin tức mới cập nhật'}
+      </h3>
+
+      <div class="space-y-4">
+        {targetList.length === 0 ? (
+          <p class="text-gray-500 text-center py-10">Không tìm thấy bài viết nào phù hợp.</p>
+        ) : (
+          targetList.map((art: any, index: number) => {
+            const bgStyle = `background-color: ${art.color_code || '#ef4444'}`;
+            return (
+              <div class="contents">
+                <article class="flex flex-col sm:flex-row gap-5 bg-white p-4 rounded-xl border border-gray-100 shadow-xs hover:shadow-sm transition-all">
+                  <a href={`/bai-viet/${art.slug}`} class="sm:w-44 h-28 flex-shrink-0 overflow-hidden rounded-lg bg-gray-50 block">
+                    <img src={art.image_url} alt={art.title} class="w-full h-full object-cover" />
+                  </a>
+                  <div class="flex flex-col justify-between py-0.5">
+                    <div class="space-y-1.5">
+                      <span class="text-[10px] font-bold uppercase text-white px-2 py-0.5 rounded" style={bgStyle}>
+                        {art.category_name}
+                      </span>
+                      <h4 class="text-base font-bold text-gray-900 hover:text-red-600 leading-snug">
+                        <a href={`/bai-viet/${art.slug}`}>{art.title}</a>
+                      </h4>
+                      <p class="text-gray-500 text-xs line-clamp-2 leading-relaxed">
+                        {art.sapo}
+                      </p>
+                    </div>
+                    <div class="text-[11px] text-gray-400 mt-2">👁️ {art.view_count} lượt xem</div>
+                  </div>
+                </article>
+                
+                {index === 1 && adsInfeed && <Fragment set:html={adsInfeed} />}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+
+    <div class="space-y-6">
+      
+      <div class="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+        <h3 class="font-black text-gray-950 text-lg border-b pb-3 mb-4 flex items-center justify-between">
+          <span class="flex items-center gap-2">📈 Xu hướng độc giả</span>
+          <span class="flex h-2 w-2 relative">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+          </span>
+        </h3>
+        
+        <div class="divide-y divide-gray-100">
+          {trendingArticles.map((item: any, idx: number) => {
+            const textColorStyle = `color: ${item.color_code || '#ef4444'}`;
+            return (
+              <div class="py-3.5 first:pt-0 last:pb-0 flex gap-3 items-start group">
+                <span class={`text-xl font-black w-6 text-center ${idx === 0 ? 'text-red-600' : idx === 1 ? 'text-orange-500' : idx === 2 ? 'text-amber-500' : 'text-gray-300'}`}>
+                  {idx + 1}
+                </span>
+                <div class="space-y-1">
+                  <a href={`/bai-viet/${item.slug}`} class="text-sm font-semibold text-gray-900 group-hover:text-red-600 transition-colors line-clamp-2 leading-snug">
+                    {item.title}
+                  </a>
+                  <div class="flex items-center gap-2 text-[11px]">
+                    <span class="font-medium" style={textColorStyle}>{item.category_name}</span>
+                    <span class="text-gray-400">•</span>
+                    <span class="text-gray-400">{item.view_count} xem</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div class="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+        <h3 class="font-black text-gray-950 text-lg border-b pb-3 mb-4 flex items-center gap-2">
+          🔥 Đọc nhiều nhất
+        </h3>
+        
+        <div class="space-y-4">
+          {topViewsArticles.map((top: any) => (
+            <a href={`/bai-viet/${top.slug}`} class="flex gap-3 cursor-pointer group pb-3 border-b border-gray-50 last:border-0 last:pb-0">
+              <div class="w-20 h-14 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 border border-gray-100">
+                <img src={top.image_url} class="w-full h-full object-cover group-hover:scale-105 transition duration-300" alt="thumb" />
+              </div>
+              <div class="flex flex-col justify-between py-0.5">
+                <span class="text-xs font-bold text-gray-800 group-hover:text-red-600 line-clamp-2 transition-colors leading-snug">
+                  {top.title}
+                </span>
+                <span class="text-[10px] text-gray-400 mt-1">👁️ {top.view_count} lượt xem</span>
+              </div>
+            </a>
+          ))}
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</Layout>
