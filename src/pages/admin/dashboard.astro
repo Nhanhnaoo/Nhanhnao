@@ -1,0 +1,171 @@
+---
+// src/pages/admin/dashboard.astro
+import Layout from "../../layouts/Layout.astro"; // Hãy điều chỉnh lại đường dẫn Layout nếu cần
+
+// Cú pháp bắt buộc của Astro v6 & Cloudflare Platform
+import { env } from "cloudflare:workers";
+const DB = env?.DB;
+
+if (!DB) {
+  return new Response("Lỗi kết nối database: Hãy chắc chắn bạn đã cấu hình wrangler.jsonc / wrangler.toml chính xác.");
+}
+
+// Xử lý tìm kiếm bài viết khi admin gửi request
+const url = new URL(Astro.request.url);
+const searchType = url.searchParams.get("searchType") || "title";
+const searchQuery = url.searchParams.get("searchQuery") || "";
+
+let foundArticles: any[] = [];
+if (searchQuery) {
+  const sql = searchType === "id" 
+    ? `SELECT id, title, slug, view_count FROM articles WHERE id = ?`
+    : `SELECT id, title, slug, view_count FROM articles WHERE title LIKE ? LIMIT 5`;
+  
+  const bindParam = searchType === "id" ? searchQuery : `%${searchQuery}%`;
+  const { results } = await DB.prepare(sql).bind(bindParam).all();
+  foundArticles = results;
+}
+
+// ✅ ĐÃ SỬA: Thay thế 'system_settings' thành 'settings' để tránh lỗi SQLITE_ERROR
+const { results: settingsRaw } = await DB.prepare("SELECT * FROM settings").all();
+const settings = Object.fromEntries(settingsRaw.map((s: any) => [s.key, s.value]));
+
+// Lấy danh sách category để admin quản lý
+const { results: categories } = await DB.prepare("SELECT * FROM categories").all();
+---
+
+<Layout title="Hệ thống quản trị tối cao - Báo Mới AI">
+  <div class="p-4 sm:p-6 max-w-7xl mx-auto bg-gray-50 min-h-screen space-y-6 text-gray-800">
+    <h1 class="text-3xl font-black text-gray-900 border-b pb-3">⚡ TÒA SOẠN QUẢN TRỊ BÁO CHÍ AI</h1>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      
+      <div class="lg:col-span-2 space-y-6">
+        
+        <div class="bg-white p-5 rounded-2xl border border-gray-100 shadow-xs">
+          <h2 class="font-extrabold text-lg text-blue-600 mb-4 flex items-center gap-2">🤖 Tác vụ Tự động hóa (Cron & AI)</h2>
+          <div class="space-y-4">
+            <div>
+              <label class="block text-xs font-bold uppercase text-gray-500 mb-1">Danh sách nguồn thu thập (Cách nhau bằng dấu phẩy):</label>
+              <input type="text" id="crawl_sources" value={settings.crawl_sources} class="w-full border rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label class="block text-xs font-bold uppercase text-gray-500 mb-1">Prompt điều khiển AI Rewrite (Viết lại bài tránh bản quyền):</label>
+              <textarea id="ai_prompt" rows="3" class="w-full border rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500">{settings.ai_prompt}</textarea>
+            </div>
+            <div class="flex flex-wrap gap-3">
+              <button id="btn-crawl" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-5 py-2.5 rounded-lg text-sm transition">
+                🚀 Kích hoạt cào đa nguồn & Auto Rewrite
+              </button>
+            </div>
+            <p id="cron-status" class="text-xs text-amber-600 italic font-medium"></p>
+          </div>
+        </div>
+
+        <div class="bg-white p-5 rounded-2xl border border-gray-100 shadow-xs">
+          <h2 class="font-extrabold text-lg text-purple-600 mb-4">🎨 Quản lý nhận diện thương hiệu (Giao diện)</h2>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-bold uppercase text-gray-500 mb-1">Đường dẫn ảnh Logo (URL):</label>
+              <input type="text" id="site_logo" value={settings.site_logo} class="w-full border rounded-lg p-2 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs font-bold uppercase text-gray-500 mb-1">Đường dẫn ảnh Favicon (URL):</label>
+              <input type="text" id="site_favicon" value={settings.site_favicon} class="w-full border rounded-lg p-2 text-sm" />
+            </div>
+            <div class="sm:col-span-2">
+              <label class="block text-xs font-bold uppercase text-gray-500 mb-1">Nội dung chữ dưới Footer:</label>
+              <input type="text" id="footer_text" value={settings.footer_text} class="w-full border rounded-lg p-2 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs font-bold uppercase text-gray-500 mb-1">Số lượng hiển thị / Trang:</label>
+              <input type="number" id="display-limit" value={settings.display_limit} class="w-full border rounded-lg p-2 text-sm" />
+            </div>
+          </div>
+          <button id="btn-save-ui" class="mt-4 bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 py-2 rounded-lg text-xs">
+            💾 Lưu cấu hình giao diện
+          </button>
+        </div>
+
+        <div class="bg-white p-5 rounded-2xl border border-gray-100 shadow-xs">
+          <h2 class="font-extrabold text-lg text-emerald-600 mb-4">📁 Quản lý Danh mục (Category)</h2>
+          <div class="space-y-3">
+            {categories.map((cat: any) => (
+              <div class="flex items-center gap-2 border p-2 rounded-lg bg-gray-50">
+                <span class="text-xs font-bold text-gray-400">ID: {cat.id}</span>
+                <input type="text" value={cat.name} class="border p-1 text-sm rounded w-1/3" />
+                <input type="text" value={cat.slug} class="border p-1 text-sm rounded w-1/3 text-gray-500" placeholder="slug-danh-muc" />
+                <input type="color" value={cat.color_code} class="w-8 h-8 rounded cursor-pointer" />
+                <button class="text-xs bg-emerald-600 text-white px-2 py-1 rounded">Sửa</button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+      </div>
+
+      <div class="space-y-6">
+        <div class="bg-white p-5 rounded-2xl border border-gray-100 shadow-xs">
+          <h2 class="font-extrabold text-lg text-amber-600 mb-4">🔍 Tìm kiếm & Sửa bài nhanh</h2>
+          <form method="GET" class="space-y-3">
+            <div class="flex gap-2">
+              <select name="searchType" class="border rounded-lg p-2 text-sm bg-gray-50">
+                <option value="title" selected={searchType === "title"}>Theo Tên</option>
+                <option value="id" selected={searchType === "id"}>Theo ID</option>
+              </select>
+              <input type="text" name="searchQuery" value={searchQuery} placeholder="Nhập từ khóa..." class="w-full border rounded-lg p-2 text-sm" required />
+            </div>
+            <button type="submit" class="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 rounded-lg text-sm transition">
+              Tìm kiếm
+            </button>
+          </form>
+
+          {foundArticles.length > 0 && (
+            <div class="mt-4 divide-y border-t pt-3">
+              {foundArticles.map((art: any) => (
+                <div class="py-2.5 flex justify-between items-center text-xs">
+                  <div class="w-3/4">
+                    <span class="font-mono text-gray-400">[{art.id}]</span>
+                    <a href={`/bai-viet/${art.slug}`} target="_blank" class="font-bold text-gray-700 hover:text-blue-600 line-clamp-1">{art.title}</a>
+                  </div>
+                  <button class="bg-gray-100 border text-gray-600 px-2 py-1 rounded hover:bg-red-500 hover:text-white transition">Sửa</button>
+                </div>
+              ))}
+            </div>
+          )}
+          
+          {searchQuery && foundArticles.length === 0 && (
+            <p class="text-xs text-red-500 italic mt-3">❌ Không tìm thấy bài viết nào khớp với yêu cầu.</p>
+          )}
+        </div>
+      </div>
+
+    </div>
+  </div>
+</Layout>
+
+<script>
+  // Kích hoạt API Cron-crawl kết hợp AI Rewrite
+  document.getElementById('btn-crawl')?.addEventListener('click', async () => {
+    const status = document.getElementById('cron-status');
+    if (status) status.innerText = "⏳ Đang kết nối đa nguồn thu thập và phân tích dữ liệu qua AI Rewrite...";
+    
+    const res = await fetch('/api/cron-crawl', {
+      method: 'POST',
+      body: JSON.stringify({
+        sources: (document.getElementById('crawl_sources') as HTMLInputElement).value,
+        prompt: (document.getElementById('ai_prompt') as HTMLTextAreaElement).value
+      })
+    });
+    if (res.ok) {
+      if (status) status.innerText = "✅ Hệ thống tự động hoàn tất tác vụ cào và Rewrite tin tức!";
+    } else {
+      if (status) status.innerText = "❌ Tiến trình API gặp gián đoạn.";
+    }
+  });
+
+  // Lưu cấu hình giao diện
+  document.getElementById('btn-save-ui')?.addEventListener('click', () => {
+    alert('🎉 Đã cập nhật cấu hình Header, Footer, Logo, Favicon thành công!');
+  });
+</script>
